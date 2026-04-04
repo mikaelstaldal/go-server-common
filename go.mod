@@ -1,4 +1,4 @@
-module go-server-common
+module github.com/mikaelstaldal/go-server-common
 
 go 1.25.0
 
