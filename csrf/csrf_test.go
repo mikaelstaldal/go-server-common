@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mikaelstaldal/go-server-common/csrf"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestCSRFMiddleware(t *testing.T) {
@@ -173,9 +174,7 @@ func TestCSRFMiddleware(t *testing.T) {
 			}
 			rr := httptest.NewRecorder()
 			h.ServeHTTP(rr, req)
-			if rr.Code != tc.wantStatus {
-				t.Errorf("got status %d, want %d", rr.Code, tc.wantStatus)
-			}
+			assert.Equal(t, tc.wantStatus, rr.Code)
 		})
 	}
 
@@ -191,9 +190,7 @@ func TestCSRFMiddleware(t *testing.T) {
 			}
 			rr := httptest.NewRecorder()
 			h.ServeHTTP(rr, req)
-			if rr.Code != tc.wantStatus {
-				t.Errorf("got status %d, want %d", rr.Code, tc.wantStatus)
-			}
+			assert.Equal(t, tc.wantStatus, rr.Code)
 		})
 	}
 }

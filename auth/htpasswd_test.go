@@ -7,15 +7,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 )
 
 func hashPassword(t *testing.T, password string) string {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return string(hash)
 }
 
@@ -23,9 +23,8 @@ func writeTempHtpasswd(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "htpasswd")
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
+	err := os.WriteFile(path, []byte(content), 0600)
+	require.NoError(t, err)
 	return path
 }
 
@@ -34,18 +33,10 @@ func TestLoadHtpasswd(t *testing.T) {
 	path := writeTempHtpasswd(t, "admin:"+hash+"\n")
 
 	htpasswd, err := LoadHtpasswd(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !htpasswd.Check("admin", "secret") {
-		t.Error("expected valid credentials to pass")
-	}
-	if htpasswd.Check("admin", "wrong") {
-		t.Error("expected wrong password to fail")
-	}
-	if htpasswd.Check("nobody", "secret") {
-		t.Error("expected unknown user to fail")
-	}
+	require.NoError(t, err)
+	assert.True(t, htpasswd.Check("admin", "secret"), "expected valid credentials to pass")
+	assert.False(t, htpasswd.Check("admin", "wrong"), "expected wrong password to fail")
+	assert.False(t, htpasswd.Check("nobody", "secret"), "expected unknown user to fail")
 }
 
 func TestLoadHtpasswd_SkipsCommentsAndBlanks(t *testing.T) {
@@ -54,27 +45,19 @@ func TestLoadHtpasswd_SkipsCommentsAndBlanks(t *testing.T) {
 	path := writeTempHtpasswd(t, content)
 
 	htpasswd, err := LoadHtpasswd(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !htpasswd.Check("user", "pass") {
-		t.Error("expected valid credentials to pass")
-	}
+	require.NoError(t, err)
+	assert.True(t, htpasswd.Check("user", "pass"), "expected valid credentials to pass")
 }
 
 func TestLoadHtpasswd_EmptyFile(t *testing.T) {
 	path := writeTempHtpasswd(t, "# only comments\n")
 	_, err := LoadHtpasswd(path)
-	if err == nil {
-		t.Error("expected error for empty htpasswd file")
-	}
+	assert.Error(t, err, "expected error for empty htpasswd file")
 }
 
 func TestLoadHtpasswd_MissingFile(t *testing.T) {
 	_, err := LoadHtpasswd("/nonexistent/htpasswd")
-	if err == nil {
-		t.Error("expected error for missing file")
-	}
+	assert.Error(t, err, "expected error for missing file")
 }
 
 func TestMiddleware(t *testing.T) {
@@ -82,9 +65,7 @@ func TestMiddleware(t *testing.T) {
 	path := writeTempHtpasswd(t, "admin:"+hash+"\n")
 
 	htpasswd, err := LoadHtpasswd(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -95,12 +76,8 @@ func TestMiddleware(t *testing.T) {
 		req := httptest.NewRequest("GET", "/", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("expected 401, got %d", rec.Code)
-		}
-		if rec.Header().Get("WWW-Authenticate") == "" {
-			t.Error("expected WWW-Authenticate header")
-		}
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+		assert.NotEmpty(t, rec.Header().Get("WWW-Authenticate"), "expected WWW-Authenticate header")
 	})
 
 	t.Run("valid credentials", func(t *testing.T) {
@@ -108,9 +85,7 @@ func TestMiddleware(t *testing.T) {
 		req.SetBasicAuth("admin", "secret")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Errorf("expected 200, got %d", rec.Code)
-		}
+		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
 	t.Run("wrong password", func(t *testing.T) {
@@ -118,8 +93,6 @@ func TestMiddleware(t *testing.T) {
 		req.SetBasicAuth("admin", "wrong")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("expected 401, got %d", rec.Code)
-		}
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	})
 }
