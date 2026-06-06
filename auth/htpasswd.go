@@ -3,6 +3,7 @@ package auth
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -34,8 +35,15 @@ func LoadHtpasswd(path string) (*HtpasswdFile, error) {
 		if len(parts) != 2 {
 			continue
 		}
-		users[parts[0]] = parts[1]
-		dummyHash = []byte(parts[1])
+		hash := parts[1]
+		if _, err := bcrypt.Cost([]byte(hash)); err != nil {
+			continue
+		}
+		if _, exists := users[parts[0]]; exists {
+			log.Printf("warning: htpasswd file contains duplicate username %q", parts[0])
+		}
+		users[parts[0]] = hash
+		dummyHash = []byte(hash)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read htpasswd file: %w", err)
