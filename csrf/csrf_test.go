@@ -11,10 +11,12 @@ import (
 )
 
 func TestCSRFMiddleware(t *testing.T) {
+	const serverOrigin = "http://example.com"
+
 	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	h := csrf.Middleware(okHandler)
+	h := csrf.Middleware(serverOrigin)(okHandler)
 
 	cases := []struct {
 		name       string
@@ -60,25 +62,25 @@ func TestCSRFMiddleware(t *testing.T) {
 		{
 			name:       "POST same origin",
 			method:     http.MethodPost,
-			origin:     "http://example.com",
+			origin:     serverOrigin,
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "PUT same origin",
 			method:     http.MethodPut,
-			origin:     "http://example.com",
+			origin:     serverOrigin,
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "PATCH same origin",
 			method:     http.MethodPatch,
-			origin:     "http://example.com",
+			origin:     serverOrigin,
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "DELETE same origin",
 			method:     http.MethodDelete,
-			origin:     "http://example.com",
+			origin:     serverOrigin,
 			wantStatus: http.StatusOK,
 		},
 
@@ -116,7 +118,7 @@ func TestCSRFMiddleware(t *testing.T) {
 		{
 			name:       "POST same origin with cross-origin referer",
 			method:     http.MethodPost,
-			origin:     "http://example.com",
+			origin:     serverOrigin,
 			referer:    "https://evil.example.com/page",
 			wantStatus: http.StatusOK,
 		},
@@ -130,38 +132,6 @@ func TestCSRFMiddleware(t *testing.T) {
 		},
 	}
 
-	proxyForwardedCases := []struct {
-		name           string
-		method         string
-		origin         string
-		xForwardedHost string
-		wantStatus     int
-	}{
-		// Reverse proxy terminates TLS: browser sends https origin, internal connection is http.
-		// Only X-Forwarded-Host is checked; scheme difference is a TLS-termination artefact.
-		{
-			name:           "POST same host via proxy (https origin, no proto header)",
-			method:         http.MethodPost,
-			origin:         "https://www.staldal.nu",
-			xForwardedHost: "www.staldal.nu",
-			wantStatus:     http.StatusOK,
-		},
-		{
-			name:           "POST same host via proxy (https origin, with proto header)",
-			method:         http.MethodPost,
-			origin:         "https://www.staldal.nu",
-			xForwardedHost: "www.staldal.nu",
-			wantStatus:     http.StatusOK,
-		},
-		{
-			name:           "POST cross-origin with proxy header",
-			method:         http.MethodPost,
-			origin:         "https://evil.example.com",
-			xForwardedHost: "www.staldal.nu",
-			wantStatus:     http.StatusForbidden,
-		},
-	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, "/api/v1/events", strings.NewReader("{}"))
@@ -171,22 +141,6 @@ func TestCSRFMiddleware(t *testing.T) {
 			}
 			if tc.referer != "" {
 				req.Header.Set("Referer", tc.referer)
-			}
-			rr := httptest.NewRecorder()
-			h.ServeHTTP(rr, req)
-			assert.Equal(t, tc.wantStatus, rr.Code)
-		})
-	}
-
-	for _, tc := range proxyForwardedCases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(tc.method, "/api/v1/events", strings.NewReader("{}"))
-			req.Host = "localhost:8081"
-			if tc.origin != "" {
-				req.Header.Set("Origin", tc.origin)
-			}
-			if tc.xForwardedHost != "" {
-				req.Header.Set("X-Forwarded-Host", tc.xForwardedHost)
 			}
 			rr := httptest.NewRecorder()
 			h.ServeHTTP(rr, req)
