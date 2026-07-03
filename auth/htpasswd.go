@@ -69,6 +69,9 @@ func (h *HtpasswdFile) Middleware(realm string) func(http.Handler) http.Handler 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			username, password, ok := r.BasicAuth()
 			if !ok || !h.Check(username, password) {
+				// log the client address of every 401 response so that/external tools such as fail2ban can watch for
+				// and block brute-force attempts against HTTP basic auth.
+				log.Printf("authentication failed: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm=%q`, realm))
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
