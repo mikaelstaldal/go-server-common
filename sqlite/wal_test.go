@@ -202,3 +202,40 @@ func TestMigrateInMemoryDatabaseIsNotWAL(t *testing.T) {
 		}
 	}
 }
+
+// MigrateStrict's BEGIN IMMEDIATE depends on the caller's busy_timeout to bound
+// how long it waits for the migration lock, on a connection of its own. The WAL
+// step borrows a connection and turns that timeout off, so this checks it gives
+// it back -- otherwise the migration lock would stop waiting and start failing.
+func TestMigrateStrictLeavesBusyTimeoutForTheMigrationLock(t *testing.T) {
+	db, _ := openFresh(t) // DSN sets busy_timeout=5000
+	// One connection, so the WAL step and the migration lock share it and any
+	// change the WAL step failed to undo would be visible to the migration.
+	db.SetMaxOpenConns(1)
+
+	var before int
+	require.NoError(t, db.QueryRow("PRAGMA busy_timeout").Scan(&before))
+	require.Equal(t, 5000, before, "precondition: the DSN sets a busy timeout")
+
+	require.NoError(t, sqlite.MigrateStrict(context.Background(), db, testMigrations))
+
+	var after int
+	require.NoError(t, db.QueryRow("PRAGMA busy_timeout").Scan(&after))
+	assert.Equal(t, 5000, after, "the migration lock still needs the caller's busy_timeout")
+
+	version, err := sqlite.UserVersion(db)
+	require.NoError(t, err)
+	assert.Equal(t, len(testMigrations), version)
+}
+
+// The same for the non-strict path, whose migrations use db.Begin.
+func TestMigrateLeavesBusyTimeoutAlone(t *testing.T) {
+	db, _ := openFresh(t)
+	db.SetMaxOpenConns(1)
+
+	require.NoError(t, sqlite.Migrate(db, testMigrations))
+
+	var after int
+	require.NoError(t, db.QueryRow("PRAGMA busy_timeout").Scan(&after))
+	assert.Equal(t, 5000, after)
+}
