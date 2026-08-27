@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -64,6 +65,12 @@ func (h *HtpasswdFile) Check(username, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
+// Middleware returns a middleware that requires HTTP basic authentication
+// against h, presenting realm to clients that supply none.
+//
+// A request that passes reaches the next handler with its authenticated
+// username in the request context, readable with UsernameFromContext, so a
+// handler can attribute the request without parsing the header again.
 func (h *HtpasswdFile) Middleware(realm string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,10 +80,12 @@ func (h *HtpasswdFile) Middleware(realm string) func(http.Handler) http.Handler 
 				// and block brute-force attempts against HTTP basic auth.
 				log.Printf("authentication failed: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm=%q`, realm))
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 				return
 			}
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(ContextWithUsername(r.Context(), username)))
 		})
 	}
 }
