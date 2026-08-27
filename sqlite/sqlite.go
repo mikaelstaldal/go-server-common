@@ -3,6 +3,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -60,9 +61,11 @@ func Migrate(db *sql.DB, migrations [][]string) error {
 		return fmt.Errorf("read user_version: %w", err)
 	}
 
+	// journal_mode is a property of the file rather than of a transaction and
+	// cannot be set inside one, so it is set once before any batch runs.
 	if version == 0 {
-		if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
-			return fmt.Errorf("set WAL mode: %w", err)
+		if err := setWALMode(context.Background(), db); err != nil {
+			return err
 		}
 	}
 

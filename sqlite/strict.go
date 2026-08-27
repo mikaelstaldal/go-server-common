@@ -62,8 +62,8 @@ func MigrateStrict(ctx context.Context, db *sql.DB, migrations [][]string) error
 	// journal_mode is a property of the file rather than of a transaction and
 	// cannot be set inside one, so it is set once before any batch runs.
 	if version == 0 {
-		if _, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
-			return fmt.Errorf("set WAL mode: %w", err)
+		if err := setWALMode(ctx, db); err != nil {
+			return err
 		}
 	}
 
