@@ -44,8 +44,9 @@ func StaticHandler(fsys fs.FS) (http.Handler, error) {
 		w.Header().Set("Cache-Control", "no-cache")
 		if etag, ok := etags[r.URL.Path]; ok {
 			w.Header().Set("ETag", etag)
-			w.Header().Add("Vary", "Accept-Encoding")
 			if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+				// This response returns before reaching the gzip middleware.
+				w.Header().Add("Vary", "Accept-Encoding")
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}

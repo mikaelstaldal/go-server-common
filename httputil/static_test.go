@@ -47,6 +47,7 @@ func TestStaticHandler_ServesETagAndRevalidates(t *testing.T) {
 	assert.Equal(t, etag, rec2.Header().Get("ETag"))
 	assert.Empty(t, rec2.Body.Bytes(), "304 must not carry a body")
 	assert.Empty(t, rec2.Header().Get("Content-Encoding"), "304 must not be gzip-encoded")
+	assert.Equal(t, []string{"Accept-Encoding"}, rec2.Header().Values("Vary"))
 }
 
 func TestStaticHandler_GzipsFullResponses(t *testing.T) {
@@ -59,7 +60,7 @@ func TestStaticHandler_GzipsFullResponses(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "gzip", rec.Header().Get("Content-Encoding"))
-	assert.Contains(t, rec.Header().Values("Vary"), "Accept-Encoding")
+	assert.Equal(t, []string{"Accept-Encoding"}, rec.Header().Values("Vary"))
 
 	gr, err := gzip.NewReader(rec.Body)
 	require.NoError(t, err)
