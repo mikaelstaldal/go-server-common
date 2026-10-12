@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -92,6 +93,7 @@ func Login(ctx context.Context, client *http.Client, authorizationURL, tokenURL,
 	if interval == 0 {
 		interval = 5 * time.Second
 	}
+	interrupted := false
 	for {
 		timer := time.NewTimer(interval)
 		select {
@@ -109,15 +111,17 @@ func Login(ctx context.Context, client *http.Client, authorizationURL, tokenURL,
 		}
 		var protocol *Error
 		if !errors.As(err, &protocol) {
-			var network net.Error
-			if errors.As(err, &network) && network.Timeout() {
-				interval *= 2
+			// A dropped connection must not abandon a pending approval.
+			// Retry only polling; authorization requests may create a new grant.
+			if retryablePollingError(err) {
+				interrupted = true
+				interval = min(interval*2, 1*time.Hour)
 				continue
 			}
 			return token, err
 		}
 		if protocol.Status >= 500 || protocol.Status == 429 {
-			interval *= 2
+			interval = min(interval*2, 1*time.Hour)
 			continue
 		}
 		switch protocol.Code {
@@ -125,7 +129,24 @@ func Login(ctx context.Context, client *http.Client, authorizationURL, tokenURL,
 		case "slow_down":
 			interval += 5 * time.Second
 		default:
+			if protocol.Code == "invalid_grant" && interrupted {
+				return token, fmt.Errorf("device login: the interrupted response may have contained an issued token; check the server's API token list and revoke any unused token before starting again: %w", err)
+			}
 			return token, err
 		}
 	}
+}
+
+// Inspect each wrapper: url.Error.Timeout only checks its immediate cause.
+func retryablePollingError(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	for err != nil {
+		if network, ok := err.(net.Error); ok && network.Timeout() {
+			return true
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
 }

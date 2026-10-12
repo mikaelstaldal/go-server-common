@@ -3,8 +3,15 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -94,4 +101,87 @@ func TestPollingBackoff(t *testing.T) {
 	require.Len(t, times, 3)
 	assert.GreaterOrEqual(t, times[1].Sub(times[0]), 6*time.Second)
 	assert.GreaterOrEqual(t, times[2].Sub(times[1]), 12*time.Second)
+}
+
+// transportFunc lets tests inject failures before a polling response is received.
+type transportFunc func(*http.Request) (*http.Response, error)
+
+func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestPollingRetriesDroppedConnections(t *testing.T) {
+	for _, failure := range []error{os.ErrDeadlineExceeded, io.EOF, io.ErrUnexpectedEOF, syscall.ECONNRESET, syscall.ECONNABORTED, syscall.EPIPE} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			t.Parallel()
+			var polls []time.Time
+			authorizations := 0
+			httpClient := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+				body := `{"device_code":"device","user_code":"CODE","verification_uri":"https://example.org","expires_in":20,"interval":1}`
+				if r.URL.Path == "/auth" {
+					authorizations++
+				} else {
+					polls = append(polls, time.Now())
+					if len(polls) == 1 {
+						return nil, fmt.Errorf("connection interrupted: %w", failure)
+					}
+					body = `{"access_token":"secret","token_type":"Bearer","expires_in":60}`
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}
+			token, err := Login(context.Background(), httpClient, "https://example.org/auth", "https://example.org/token", "cli", "Name", "", "1m", func(Authorization) error { return nil })
+			require.NoError(t, err)
+			assert.Equal(t, "secret", token.AccessToken)
+			assert.Equal(t, 1, authorizations)
+			require.Len(t, polls, 2)
+			assert.GreaterOrEqual(t, polls[1].Sub(polls[0]), 2*time.Second)
+		})
+	}
+}
+
+func TestDroppedAuthorizationIsNotRetried(t *testing.T) {
+	calls := 0
+	httpClient := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, io.EOF
+	})}
+	_, err := Login(context.Background(), httpClient, "https://example.org/auth", "https://example.org/token", "cli", "Name", "", "1m", func(Authorization) error { t.Fatal("unexpected display"); return nil })
+	require.ErrorIs(t, err, io.EOF)
+	assert.Equal(t, 1, calls)
+}
+
+func TestPollingPermanentTransportError(t *testing.T) {
+	failure := errors.New("certificate is not trusted")
+	calls := 0
+	httpClient := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/auth" {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"device_code":"device","user_code":"CODE","verification_uri":"https://example.org","expires_in":20,"interval":1}`)), Header: make(http.Header)}, nil
+		}
+		calls++
+		return nil, &url.Error{Op: "Post", URL: r.URL.String(), Err: failure}
+	})}
+	_, err := Login(context.Background(), httpClient, "https://example.org/auth", "https://example.org/token", "cli", "Name", "", "1m", func(Authorization) error { return nil })
+	require.ErrorIs(t, err, failure)
+	assert.Equal(t, 1, calls)
+}
+
+func TestLostTokenResponseExplainsRecovery(t *testing.T) {
+	calls := 0
+	httpClient := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{"device_code":"device","user_code":"CODE","verification_uri":"https://example.org","expires_in":20,"interval":1}`
+		status := http.StatusOK
+		if r.URL.Path == "/token" {
+			calls++
+			if calls == 1 {
+				return nil, io.EOF
+			}
+			status = http.StatusBadRequest
+			body = `{"error":"invalid_grant"}`
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	_, err := Login(context.Background(), httpClient, "https://example.org/auth", "https://example.org/token", "cli", "Name", "", "1m", func(Authorization) error { return nil })
+	var protocol *Error
+	require.ErrorAs(t, err, &protocol)
+	assert.Equal(t, "invalid_grant", protocol.Code)
+	assert.ErrorContains(t, err, "revoke any unused token")
+	assert.Equal(t, 2, calls)
 }
