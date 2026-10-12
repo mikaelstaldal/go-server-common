@@ -49,6 +49,46 @@ methods; CSRF separately checks the source of unsafe requests, retaining its
 existing native-client behavior. Additional cross-origin clients can be added
 to CSRF's origin list independently; doing so does not permit their Host.
 
+## Device authorization (`devicegrant`)
+
+`devicegrant` implements RFC 8628 with single-use SQLite grants; the
+`devicegrant/client` subpackage depends only on the standard library. Include
+`devicegrant.DDL` in an app's versioned migrations. Configure a `Server` with
+`DB`, an explicit `ClientIDs` allowlist, `VerificationURI`, `ValidateScope` and
+`Mint`. Scope validation uses the supplied transaction to check app resources.
+Minting must use **only the supplied transaction**: token insertion and device
+row deletion commit together, so a failed mint can be retried and a successful
+code never yields a second token. Device rows contain SHA-256 hashes, never raw
+device codes or bearer secrets. Default expiry is ten minutes, poll interval five
+seconds, and at most ten live grants (including approved and denied grants), with at
+most three per socket IP (configurable with `MaxPending`/`MaxPerRequester`).
+Behind a reverse proxy, the socket IP is the proxy address. Denied grants are
+consumed when the CLI polls; expired rows are deleted on each new authorization.
+The schema-v1 DDL is immutable; future schema additions use separate migrations.
+A granted scope is revalidated at exchange time. An app returning
+`ErrInvalidGrant` for a removed resource consumes the grant without minting.
+
+Mount `Authorize` and `Poll` on POST `/api/v1/oauth/device_authorization` and
+`/api/v1/oauth/token`. Exempt these two routes from Basic authentication, but
+refuse requests carrying bearer credentials, and retain the app's Host policy,
+request body limit and recovery middleware. CLI POSTs carry no Origin/Referer;
+normal CSRF middleware permits these non-browser requests. Do not exempt
+browser requests from CSRF checks. Mount `Approval` on GET/POST
+`/api/v1/oauth/device/{user_code}` behind **full-access authentication only**,
+never bearer authentication. Approval POSTs need the usual CSRF protection.
+The approval UI must show the code, name, requested scope/lifetime, creation
+age, and requester (socket IP and User-Agent; forwarded headers are not trusted)
+before allowing the user to edit scope/lifetime and approve or deny. A complete
+verification URL pre-fills the code; it must never approve automatically.
+
+Token responses include an optional `slug` extension for revocation. There are
+no refresh tokens, discovery metadata, or dynamic client registration. The
+client's `Login` receives the app's own `*http.Client`, both endpoint URLs,
+request parameters, and a callback to display the code/URL. It waits between
+polls, adds five seconds on `slow_down`, and stops at expiry, cancellation, or a
+terminal typed `*client.Error`. Preserve the caller's HTTPS, proxy and redirect
+policies. Never log device codes or access tokens.
+
 ## License
 
 Copyright 2026 Mikael Ståldal.
