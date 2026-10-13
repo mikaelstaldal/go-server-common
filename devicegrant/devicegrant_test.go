@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -273,4 +274,67 @@ func TestPerRequesterCap(t *testing.T) {
 	w = httptest.NewRecorder()
 	s.Authorize(w, r)
 	assert.Equal(t, 200, w.Code, w.Body.String())
+}
+
+func TestUnscopedConsentIsOptInAndPolicyValidated(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("allow=%t", allow), func(t *testing.T) {
+			s, _ := setup(t)
+			s.AllowEmptyScope = allow
+			validated := 0
+			s.ValidateScope = func(ctx context.Context, tx *sql.Tx, scope []string) error {
+				validated++
+				if len(scope) != 0 {
+					return errors.New("resource scopes unsupported")
+				}
+				return nil
+			}
+			w := postForm(s.Authorize, url.Values{"client_id": {"test"}, "name": {"Unscoped"}})
+			require.Equal(t, 200, w.Code, w.Body.String())
+			var a Authorization
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &a))
+			// Unsupported resource scope remains rejected regardless of the opt-in.
+			assert.Equal(t, 400, approve(s, a.UserCode, `{"approve":true,"scope":["note:1"],"lifetime":"30d"}`).Code)
+			w = approve(s, a.UserCode, `{"approve":true,"scope":[],"lifetime":"30d"}`)
+			if !allow {
+				assert.Equal(t, 400, w.Code)
+				assert.Contains(t, poll(s, a.DeviceCode).Body.String(), "authorization_pending")
+				return
+			}
+			require.Equal(t, 200, w.Code, w.Body.String())
+			w = poll(s, a.DeviceCode)
+			require.Equal(t, 200, w.Code, w.Body.String())
+			var token Token
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &token))
+			assert.Empty(t, token.Scope)
+			assert.NotEmpty(t, token.AccessToken)
+			assert.Contains(t, poll(s, a.DeviceCode).Body.String(), "invalid_grant")
+			assert.Equal(t, 3, validated)
+		})
+	}
+	// Opting in never bypasses the application's empty-scope policy.
+	s, _ := setup(t)
+	s.AllowEmptyScope = true
+	a := start(t, s)
+	assert.Equal(t, 400, approve(s, a.UserCode, `{"approve":true,"scope":[],"lifetime":"30d"}`).Code)
+}
+
+func TestUnscopedPolicyIsRecheckedAtExchange(t *testing.T) {
+	s, _ := setup(t)
+	s.AllowEmptyScope = true
+	s.ValidateScope = func(context.Context, *sql.Tx, []string) error { return nil }
+	w := postForm(s.Authorize, url.Values{"client_id": {"test"}, "name": {"Unscoped"}})
+	require.Equal(t, 200, w.Code)
+	var a Authorization
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &a))
+	require.Equal(t, 200, approve(s, a.UserCode, `{"approve":true,"lifetime":"30d"}`).Code)
+	s.ValidateScope = func(context.Context, *sql.Tx, []string) error { return ErrInvalidGrant }
+	w = poll(s, a.DeviceCode)
+	assert.Equal(t, 400, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid_grant")
+	var count int
+	require.NoError(t, s.DB.QueryRow(`SELECT count(*) FROM minted`).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, s.DB.QueryRow(`SELECT count(*) FROM device_authorizations`).Scan(&count))
+	assert.Zero(t, count)
 }

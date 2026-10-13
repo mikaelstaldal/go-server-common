@@ -86,6 +86,9 @@ type Server struct {
 	VerificationURI string
 	// ValidateScope checks app-specific syntax and resource existence using tx.
 	ValidateScope func(context.Context, *sql.Tx, []string) error
+	// AllowEmptyScope permits unscoped consent when ValidateScope accepts an
+	// empty slice. False preserves the requirement to select at least one scope.
+	AllowEmptyScope bool
 	// Mint must write through tx only. Its changes and consuming the grant commit together.
 	Mint            func(context.Context, *sql.Tx, string, []string, time.Time) (Token, error)
 	TTL             time.Duration
@@ -493,7 +496,7 @@ func (s *Server) Approval(w http.ResponseWriter, r *http.Request) {
 	status, granted, expiry := "denied", "", ""
 	if *input.Approve {
 		duration, e := ParseLifetime(input.Lifetime)
-		if e != nil || len(input.Scope) == 0 || s.ValidateScope == nil || s.ValidateScope(r.Context(), tx, input.Scope) != nil {
+		if e != nil || (len(input.Scope) == 0 && !s.AllowEmptyScope) || s.ValidateScope == nil || s.ValidateScope(r.Context(), tx, input.Scope) != nil {
 			failure(w, 400, "invalid_request")
 			return
 		}

@@ -68,6 +68,12 @@ The schema-v1 DDL is immutable; future schema additions use separate migrations.
 A granted scope is revalidated at exchange time. An app returning
 `ErrInvalidGrant` for a removed resource consumes the grant without minting.
 
+Device grants require at least one granted resource scope by default. Apps whose
+API tokens are unscoped can set `devicegrant.Server.AllowEmptyScope = true` to
+allow empty-scope consent. `ValidateScope` still runs on approval and exchange,
+including for an empty slice; the opt-in never bypasses app policy. The token's
+OAuth `scope` is empty in that case. Scoped apps need no configuration change.
+
 Mount `Authorize` and `Poll` on POST `/api/v1/oauth/device_authorization` and
 `/api/v1/oauth/token`. Exempt these two routes from Basic authentication, but
 refuse requests carrying bearer credentials, and retain the app's Host policy,
