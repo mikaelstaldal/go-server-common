@@ -1,6 +1,6 @@
 module github.com/mikaelstaldal/go-server-common
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/stretchr/testify v1.11.1
