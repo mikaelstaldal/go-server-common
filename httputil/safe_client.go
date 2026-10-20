@@ -6,15 +6,56 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
 )
 
-// IsBlockedIP reports whether an IP must not be connected to (loopback,
-// private, link-local or unspecified addresses).
+// Special-purpose ranges are conservatively denied, including translation and
+// tunneling ranges whose embedded destination could be private.
+// Sources: https://www.iana.org/assignments/iana-ipv4-special-registry/
+// and https://www.iana.org/assignments/iana-ipv6-special-registry/
+var globalIPv6Prefix = netip.MustParsePrefix("2000::/3")
+
+var blockedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("2001::/23"), // IETF assignments, including Teredo and benchmarking
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"), // 6to4
+	netip.MustParsePrefix("3fff::/20"), // documentation
+}
+
+// IsBlockedIP rejects invalid, non-global and special-purpose addresses.
+// IPv4-mapped IPv6 addresses use the same policy as their IPv4 counterparts.
 func IsBlockedIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() {
+		return true
+	}
+	// Only the currently allocated IPv6 global unicast space is allowed.
+	// This also excludes NAT64, discard-only and other special-purpose space.
+	if addr.Is6() && !globalIPv6Prefix.Contains(addr) {
+		return true
+	}
+	for _, prefix := range blockedPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateExternalURL checks that the URL is safe to fetch (not localhost or private IPs).
@@ -74,7 +115,7 @@ func SafeDialContext(dialer *net.Dialer) func(ctx context.Context, network, addr
 				return nil, fmt.Errorf("URL must not point to a private or local address")
 			}
 		}
-		var dialErr error
+		dialErr := fmt.Errorf("could not resolve URL host")
 		for _, ip := range ips {
 			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
 			if err != nil {

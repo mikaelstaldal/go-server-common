@@ -31,6 +31,7 @@ func TestValidateExternalURL(t *testing.T) {
 	}{
 		{"valid https", "https://example.com/path", false},
 		{"valid http", "http://example.com/path", false},
+		{"file scheme", "file:///etc/passwd", true},
 		{"invalid scheme", "ftp://example.com/path", true},
 		{"no hostname", "http:///path", true},
 		{"localhost", "http://localhost/path", true},
