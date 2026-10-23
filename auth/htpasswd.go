@@ -78,7 +78,8 @@ func (h *HtpasswdFile) Middleware(realm string) func(http.Handler) http.Handler 
 			if !ok || !h.Check(username, password) {
 				// log the client address of every 401 response so that/external tools such as fail2ban can watch for
 				// and block brute-force attempts against HTTP basic auth.
-				log.Printf("authentication failed: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+				// Escape the path to prevent forged log lines; keep the peer address last.
+				log.Printf("authentication failed: %s %q from %s", r.Method, r.URL.EscapedPath(), r.RemoteAddr)
 				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm=%q`, realm))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)

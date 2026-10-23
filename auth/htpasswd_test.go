@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -139,4 +140,38 @@ func TestMiddleware(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	})
+}
+
+func TestMiddlewareFailureLogEscapesPath(t *testing.T) {
+	var buf bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+
+	htpasswd := &HtpasswdFile{}
+	handler := htpasswd.Middleware("test")(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		assert.Fail(t, "unauthenticated request reached the next handler")
+	}))
+	for _, path := range []string{
+		"/ordinary",
+		"/x%0A2026/10/23%2012:00:00%20authentication%20failed:%20GET%20/%20from%20203.0.113.7:1%0Az",
+		"/x%0Dy",
+		"/x%0D%0Ay%0Az",
+		"/x%22%5Cy",
+	} {
+		t.Run(path, func(t *testing.T) {
+			buf.Reset()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.RemoteAddr = "192.0.2.1:12345"
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			entry := buf.String()
+			assert.Equal(t, 1, strings.Count(entry, "\n"), "failure must produce exactly one log line")
+			assert.NotContains(t, entry, "\r")
+			assert.Contains(t, entry, "authentication failed: GET \""+req.URL.EscapedPath()+"\"")
+			assert.True(t, strings.HasSuffix(entry, " from 192.0.2.1:12345\n"))
+		})
+	}
 }
