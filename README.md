@@ -95,6 +95,19 @@ polls, adds five seconds on `slow_down`, and stops at expiry, cancellation, or a
 terminal typed `*client.Error`. Preserve the caller's HTTPS, proxy and redirect
 policies. Never log device codes or access tokens.
 
+## Terminal output (`termsafe`)
+
+Use `termsafe.String(text)` for diagnostics and `termsafe.Copy(dst, src)` for
+streamed terminal text. Both visibly escape terminal controls and Unicode bidi
+controls, preserve TAB, LF, CRLF and ordinary Unicode, and escape malformed UTF-8
+bytes individually. Controls use JSON-compatible Unicode escapes so valid JSON
+retains its values. Escaping is idempotent.
+
+The package does not detect terminals. Callers decide when to escape human-readable
+output; use `io.Copy` for downloads and redirected output that must retain its
+original bytes. Streaming failures propagate, and buffered text is flushed even
+when a read fails.
+
 ## License
 
 Copyright 2026 Mikael Ståldal.
